@@ -2,9 +2,43 @@
 
 import numpy as np
 from copy import deepcopy
+import multiprocessing as mp
 
-#def enkf_update(xbm, Xbp, Y, H, R, loc=None, inflate=None):
-def enkf_update(prior_state,obs,inflate=None,loc=False):
+
+def update(prior_state,obs,inflate=None,loc=False,nproc=1):
+
+    # If there is 1 (or none) processors given, then 
+    # Don't worry about splitting up the state
+    if nproc <= 1:
+        posterior_state, posterior_obs = enkf_update(prior_state, obs, inflate=inflate, loc=loc)
+        return posterior_state, posterior_obs
+
+
+    # If we are splitting up the state, first need to calculate observation
+    # priors
+    ob_priors = np.array([ob.H_Xb(prior_state) for ob in obs])
+    
+    # Splitting function here
+    old_state = prior_state.split_state(nproc)
+
+    
+
+
+    posterior_state = deepcopy(prior_state)
+    posterior_state.reintegrate_state(old_state)
+    return posterior_state, posterior_obs
+    
+
+
+def worker(num, statechunk, allobs, nflate, loc):
+    updated_chunk, obout = enkf_update(statechunk,allobs,inflate,loc)
+    return num, updated_chunk
+
+
+
+
+
+def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
     """
     Function to do the EnSRF update
     Originator: G. J. Hakim
@@ -23,7 +57,9 @@ def enkf_update(prior_state,obs,inflate=None,loc=False):
 
     # Modified to work with XRAY enkf --> L. Madaus 2/20/2015
     """
-    
+   
+
+
     #Nens = np.shape(Xbp)[1]   # Number of ensemble members
     #Ndim = np.shape(Xbp)[0]   # Number of variables in state vector
     #Nobs = np.shape(Y)[0]     # Total number of observations
@@ -42,6 +78,17 @@ def enkf_update(prior_state,obs,inflate=None,loc=False):
     Xap = np.reshape(post_state.ensemble_perts().values,(Nstate,Nens))
     Xbp = np.reshape(prior_state.ensemble_perts().values,(Nstate,Nens))
     print Xap.shape
+
+    # Check to see if we are appending the obs to the state
+    if obs_in_state is not None:
+        ob_xam = np.mean(obs_in_state, axis=1)
+        ob_Xap = np.subtract(obs_in_state,ob_xam[:,None])
+        xam = np.concatenate(xam, ob_xam)
+        xbm = np.concatenate(xbm, ob_xam)
+        Xap = np.concatenate(Xap, ob_Xap)
+        Xbp = np.concatenate(Xbp, ob_Xap)
+
+
     # Now loop over all observations
     for obnum,ob in enumerate(obs):
         # Reset the mean and perturbations
@@ -53,7 +100,11 @@ def enkf_update(prior_state,obs,inflate=None,loc=False):
         #print "Mean", np.tile(xbm,(Nens,1))
         #print np.transpose(np.tile(xbm,(Nens,1))) + Xbp
         #print H
-        H = ob.H(prior_state)
+        if obs_in_state is not None:
+            H = np.zeros(xam.shape)
+            H[Nstate+obnum] = 1.0
+        else:
+            H = ob.H(prior_state)
         Ye = np.dot(H,np.add(xbm[:,None], Xbp))
 
         #Ye = ob.H_Xb(post_state)
@@ -105,8 +156,14 @@ def enkf_update(prior_state,obs,inflate=None,loc=False):
 
         # Option to localize the gain
         if loc not in [None, False]:
-            # Project the localization 
-            kcov = np.multiply(ob.localize(prior_state, type=loc, full_state=True),kcov)
+            # Project the localization
+            state_localize = ob.localize(prior_state, type=loc,
+                                             full_state=True)
+            if obs_in_state is not None:
+                # Now need to localize for obs
+                obs_localize = ob.localize(obs, type=loc, localizing_obs = True)
+                state_localize = np.concatenate(state_localize, obs_localize)
+            kcov = np.multiply(state_localize,kcov)
             #kcov = np.dot(kcov,np.transpose(loc[ob,:]))
    
         # Compute the Kalman gain
@@ -143,7 +200,7 @@ def enkf_update(prior_state,obs,inflate=None,loc=False):
         ob.assimilated = True
 
     # Reset the state
-    post_state.update_state_from_array(np.add(xam[:,None],Xap))
+    post_state.update_state_from_array(np.add(xam[:Nstate,None],Xap[:Nstate,:]))
     # Return the assimilated observations
     return post_state, obs
     # Return the analysis mean and perturbations

@@ -9,6 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, time
 import pytz
+from ensemble_class import Xray_Ensemble_State
 import sys, os
 sys.path.append('../data_parsers')
 
@@ -100,8 +101,16 @@ class Observation:
         # Get the localization halfwidth from 
         halfwidth = self.localize_radius
 
-        # Get distance to all points in the state
-        distances = self.distance_to_state(state)
+        if isinstance(state, Xray_Ensemble_State):
+            # Get distance to all points in the state
+            distances = self.distance_to_state(state)
+        else:
+            # Must be a list of observations
+            ourloc = [np.float(x) for x in self.location.split(',')]
+            other_lats = [float(ob.location.split(',')[0]) for ob in state]
+            other_lons = [float(ob.location.split(',')[1]) for ob in state]
+            distances = np.array([haversine(ourloc,s) for s in zip(other_lats,
+                                                                   other_lons)])
         
         # If halfwidth is None, return an array of ones
         if halfwidth is None:

@@ -22,7 +22,10 @@ class Xray_Ensemble_State:
         if isinstance(state, Dataset):
             """ Read in the dataset here """
             pass
-        
+        elif isinstance(state, xray.DataArray):
+            """ We're given a data array already.  Simply set the state values
+            to be the data array """
+            self.state = state
         else:
             meta_names = meta.keys()
             meta_names.sort()
@@ -57,7 +60,56 @@ class Xray_Ensemble_State:
             
             #Convert self.state to a Dataset instead?
 
+    def split_state(self,nChunks):
+        """ Function to split the state Xray object into nChunks number of
+        smaller Xray objects for multiprocessing.  Returns a dictionary of state
+        chunks.  This dictionary may be re-fed into the master state using the
+        function "reintegrate_state" which will overwrite the master state Xray
+        object with the separate parts """
+        
+        state_chunks = {}
 
+        # Figure out how big each section must be
+        bounds = self.chunk_bounds(nChunks)
+
+        # Now separate along the location dimension according to the bounds
+        for cnum, bnds in bounds.items():
+            state_chunks[cnum] = \
+                    Xray_Ensemble_State(
+                        state=self.state[dict(location=slice(bnds[0],bnds[1]))]
+                    )
+        return state_chunks
+
+    def reintegrate_state(self, state_chunks):
+        """ Reintegrate the state vector from various chunks.  The opposite of
+        split_state.  This will overwrite self.state """
+        num_chunks = len(state_chunks.keys())
+
+        # Get the bounds
+        bounds = self.chunk_bounds(num_chunks)
+
+        # Now reset the master state vector
+        for cnum, bnds in bounds.items():
+            self.state[dict(location=slice(bnds[0],bnds[1]))] = state_chunks[cnum].state
+
+
+
+    def chunk_bounds(self, nChunks):
+        """ Function to compute the bounding array locations when dividing up a
+        state array.  Returns a dictionary."""
+        chunk_bounds = {}
+        num_locs = self.num_locs()
+
+        # Divide along the locations dimension
+        chunk_length = num_locs / (nChunks-1)
+
+        # Now set up the chunks
+        for x in xrange(nChunks):
+            if x != (nChunks-1):
+                chunk_bounds[x] = (x*chunk_length,(x+1)*chunk_length)
+            else:
+                chunk_bounds[x] = (x*chunk_length, None)
+        return chunk_bounds
 
         
     def state_to_array(self):
@@ -84,6 +136,9 @@ class Xray_Ensemble_State:
     def num_vars(self):
         """ Returns number of variables in the ensemble """
         return self.state.coords['var'].size
+    def num_locs(self):
+        """ Returns number of locations """
+        return self.state.coords['location'].size
 
 
     def num_state(self):
