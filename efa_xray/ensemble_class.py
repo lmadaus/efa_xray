@@ -68,16 +68,14 @@ class Xray_Ensemble_State:
         object with the separate parts """
         
         state_chunks = {}
-
+        print("In split state!")
         # Figure out how big each section must be
         bounds = self.chunk_bounds(nChunks)
 
         # Now separate along the location dimension according to the bounds
         for cnum, bnds in bounds.items():
             state_chunks[cnum] = \
-                    Xray_Ensemble_State(
-                        state=self.state[dict(location=slice(bnds[0],bnds[1]))]
-                    )
+                    Xray_Ensemble_State(state=self.state.isel(location=slice(bnds[0],bnds[1])))
         return state_chunks
 
     def reintegrate_state(self, state_chunks):
@@ -101,7 +99,8 @@ class Xray_Ensemble_State:
         num_locs = self.num_locs()
 
         # Divide along the locations dimension
-        chunk_length = num_locs / (nChunks-1)
+        chunk_length = num_locs / (nChunks)
+        print("Num locs:", num_locs, "Chunk_length:", chunk_length)
 
         # Now set up the chunks
         for x in xrange(nChunks):

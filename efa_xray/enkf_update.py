@@ -16,26 +16,49 @@ def update(prior_state,obs,inflate=None,loc=False,nproc=1):
 
     # If we are splitting up the state, first need to calculate observation
     # priors
+    print "Computing observation priors..."
     ob_priors = np.array([ob.H_Xb(prior_state) for ob in obs])
     
     # Splitting function here
+    print "Splitting up state among processors..."
     old_state = prior_state.split_state(nproc)
 
-    
+    # Set up the processes
+    print "Beginning update"
+    processes = []
+    output = mp.Queue()
+    for p in xrange(nproc):
+        process = mp.Process(target=worker, args=(p, old_state[p], obs,\
+                                                         inflate, loc,\
+                                                    ob_priors, output))
+        processes.append(process)
+        process.start()
 
+    new_state = []
+    stopcount = 0
+    for newchunk in iter(output.get, 'STOP'):
+        new_state.append(newchunk)
+    new_state = dict(new_state)
+
+    # Wait for all to finish
+    for p in processes:
+        p.join()
+    print "Done with update"
+    print "Re-assembling state"
+    # Get the updated state from queue
 
     posterior_state = deepcopy(prior_state)
-    posterior_state.reintegrate_state(old_state)
+    posterior_state.reintegrate_state(new_state)
+    posterior_obs = prior_obs
     return posterior_state, posterior_obs
     
 
-
-def worker(num, statechunk, allobs, nflate, loc):
-    updated_chunk, obout = enkf_update(statechunk,allobs,inflate,loc)
-    return num, updated_chunk
-
-
-
+def worker(num, statechunk, allobs, inflate, loc, obs_in_state, output):
+    updated_chunk, obout = enkf_update(statechunk,allobs,inflate,loc,obs_in_state=obs_in_state)
+    output.put((num, updated_chunk))
+    output.put('STOP')
+    print "Worker Done!"
+    return
 
 
 def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
@@ -83,10 +106,11 @@ def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
     if obs_in_state is not None:
         ob_xam = np.mean(obs_in_state, axis=1)
         ob_Xap = np.subtract(obs_in_state,ob_xam[:,None])
-        xam = np.concatenate(xam, ob_xam)
-        xbm = np.concatenate(xbm, ob_xam)
-        Xap = np.concatenate(Xap, ob_Xap)
-        Xbp = np.concatenate(Xbp, ob_Xap)
+        xam = np.hstack((xam, ob_xam))
+        xbm = np.hstack((xbm, ob_xam))
+        #print Xap.shape, ob_Xap.shape
+        Xap = np.vstack((Xap, ob_Xap))
+        Xbp = np.vstack((Xbp, ob_Xap))
 
 
     # Now loop over all observations
@@ -161,8 +185,8 @@ def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
                                              full_state=True)
             if obs_in_state is not None:
                 # Now need to localize for obs
-                obs_localize = ob.localize(obs, type=loc, localizing_obs = True)
-                state_localize = np.concatenate(state_localize, obs_localize)
+                obs_localize = ob.localize(obs, type=loc)
+                state_localize = np.hstack((state_localize, obs_localize))
             kcov = np.multiply(state_localize,kcov)
             #kcov = np.dot(kcov,np.transpose(loc[ob,:]))
    
