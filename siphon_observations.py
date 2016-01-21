@@ -9,8 +9,8 @@ def get_metar_observations(siteids=None, obtypes=['air_temperature'], use_times=
     from siphon.catalog import TDSCatalog
     from siphon.ncss import NCSS
 
-   # copied from the browser url box
-    metar_cat_url = 'http://thredds.ucar.edu/thredds/catalog/nws/metar/ncdecoded/catalog.xml?dataset=nws/metar/ncdecoded/Metar_Station_Data_fc.cdmr'
+    # copied from the browser url box
+    metar_cat_url = 'http://thredds.ucar.edu/thredds/catalog/nws/metar/ncdecoded/catalog.html?dataset=nws/metar/ncdecoded/Metar_Station_Data_fc.cdmr'
     # parse the xml
     metar_cat = TDSCatalog(metar_cat_url)
     # what datasets are here? only one "dataset" in this catalog
@@ -31,7 +31,6 @@ def get_metar_observations(siteids=None, obtypes=['air_temperature'], use_times=
     data = ncss.get_data(query)
 
     print data
-
 
 if __name__ == '__main__':
     get_metar_observations()
