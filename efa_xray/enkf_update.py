@@ -3,7 +3,8 @@
 import numpy as np
 from copy import deepcopy
 import multiprocessing as mp
-
+import sys
+import time
 
 def update(prior_state,obs,inflate=None,loc=False,nproc=1):
 
@@ -13,53 +14,67 @@ def update(prior_state,obs,inflate=None,loc=False,nproc=1):
         posterior_state, posterior_obs = enkf_update(prior_state, obs, inflate=inflate, loc=loc)
         return posterior_state, posterior_obs
 
-
+    begin = time.time()
     # If we are splitting up the state, first need to calculate observation
     # priors
     print "Computing observation priors..."
+    sys.stdout.flush()
     ob_priors = np.array([ob.H_Xb(prior_state) for ob in obs])
     
     # Splitting function here
     print "Splitting up state among processors..."
+    sys.stdout.flush()
     old_state = prior_state.split_state(nproc)
 
     # Set up the processes
     print "Beginning update"
-    processes = []
-    output = mp.Queue()
-    for p in xrange(nproc):
-        process = mp.Process(target=worker, args=(p, old_state[p], obs,\
-                                                         inflate, loc,\
-                                                    ob_priors, output))
-        processes.append(process)
-        process.start()
-
-    new_state = []
-    stopcount = 0
-    for newchunk in iter(output.get, 'STOP'):
-        new_state.append(newchunk)
-    new_state = dict(new_state)
-
+    sys.stdout.flush()
+    mp.active_children()
+    manager = mp.Manager()
+    output = manager.Queue()
+    #input = manager.Queue()
+    #for p in xrange(nproc):
+    #    input.put((p, old_state[p], obs, inflate, loc, ob_priors, output))
+    #for p in xrange(nproc):
+    #    input.put('STOP')
+    #processes = [mp.Process(target=worker, args=(input, output)) for p in xrange(nproc)]
+    processes = [mp.Process(target=worker, args=(p, old_state[p], obs, inflate, loc, ob_priors, output)) for p in xrange(nproc)]
+    for p in processes:
+        print p
+        sys.stdout.flush()
+        p.start()
+    
     # Wait for all to finish
     for p in processes:
+        print p
+        sys.stdout.flush()
         p.join()
     print "Done with update"
+    new_state = []
+    stopcount = 0
+    while stopcount < nproc:
+        newchunk = output.get()
+        new_state.append(newchunk)
+        stopcount += 1
+    
+    new_state = dict(new_state)
     print "Re-assembling state"
     # Get the updated state from queue
 
     posterior_state = deepcopy(prior_state)
+    print "Num chunks:", len(new_state.keys())
     posterior_state.reintegrate_state(new_state)
-    posterior_obs = prior_obs
+    posterior_obs = obs
+    final = time.time()
+    print "Total assimilation time:", final-begin, "seconds"
     return posterior_state, posterior_obs
     
 
-def worker(num, statechunk, allobs, inflate, loc, obs_in_state, output):
+#def worker(inq, outq):
+def worker(num, statechunk, allobs, inflate, loc, obs_in_state, outq):
     updated_chunk, obout = enkf_update(statechunk,allobs,inflate,loc,obs_in_state=obs_in_state)
-    output.put((num, updated_chunk))
-    output.put('STOP')
-    print "Worker Done!"
+    outq.put((num, updated_chunk))
     return
-
 
 def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
     """
@@ -97,10 +112,10 @@ def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
     post_state = deepcopy(prior_state)
     xam = np.reshape(post_state.ensemble_mean().values,(Nstate))
     xbm = np.reshape(prior_state.ensemble_mean().values,(Nstate))
-    print xam.shape, Nstate
+    #print xam.shape, Nstate
     Xap = np.reshape(post_state.ensemble_perts().values,(Nstate,Nens))
     Xbp = np.reshape(prior_state.ensemble_perts().values,(Nstate,Nens))
-    print Xap.shape
+    #print Xap.shape
 
     # Check to see if we are appending the obs to the state
     if obs_in_state is not None:
