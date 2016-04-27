@@ -10,7 +10,9 @@ from efa_xray.observation_class import Observation
 
 token= '####################'
 
-def get_mesowest_obs(time, bounds=None, vars=['air_temp']):
+
+
+def get_mesowest_obs(time, bounds=None, vars=['t2']):
 
     # Create mesowest object
     m = Meso(token=token)
@@ -35,13 +37,18 @@ def get_mesowest_obs(time, bounds=None, vars=['air_temp']):
     netid = 1
     #asos = [s['STID'] for s in  stations['STATION'] if s['STID'].startswith('K') and not any(char.isdigit() for char in s['STID'])]
     asos = [s['STID'] for s in stations['STATION'] if int(s['MNET_ID']) == netid and not any(char.isdigit() for char
-                                                                                             in s['STID'])]
+                                                                                                     in s['STID'])]
     # Thin
     asos = asos[::3]
     #print stations['STATION'][0]
     #print asos
+
+    # Set the variable list
+    translated_vars = [ob_translator[v] for v in vars]
+
+
     # Make the call
-    obs = m.attime(stid=asos, within='15', attime=timestr, vars=vars[0],\
+    obs = m.attime(stid=asos, within='15', vars=translated_vars, attime=timestr,\
                        units='temp|K')
     #print obs.keys()
     # Extract the information
@@ -54,10 +61,10 @@ def get_mesowest_obs(time, bounds=None, vars=['air_temp']):
         elev = float(x['ELEVATION'])
         for v in vars:
             try:
-                obval = x['OBSERVATIONS'][v+'_value_1']['value']
+                obval = x['OBSERVATIONS'][ob_translator[v]+'_value_1']['value']
                 #time = x['OBSERVATIONS'][vars[0]+'_value_1']['date_time']
                 #obtime = datetime.strptime(time, '%Y-%m-%dT%H:%M:%SZ')
-                obsject = Observation(value=float(obval),obtype='t2',time=time,error=1.0,\
+                obsject = Observation(value=float(obval),obtype=v,time=time,error=1.0,\
                                       location='{:3.7f},{:3.7f}'.format(lat,lon),
                                         description=stid,localize_radius=1000.0)
             
@@ -65,6 +72,11 @@ def get_mesowest_obs(time, bounds=None, vars=['air_temp']):
                 continue
             observations.append(obsject)
     return observations
+
+
+ob_translator = {'t2' : 'air_temp',
+                 'psfc' : 'pressure',
+                 'slp' : 'sea_level_pressure'}
 
 
 if __name__ == '__main__':
