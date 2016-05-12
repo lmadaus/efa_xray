@@ -23,7 +23,7 @@ setup(
                     'Programming Language :: Python :: 3',
                   ],
     packages    = find_packages(exclude['contrib', 'docs', 'tests*']),
-    install_requres = ['xray','numpy','matplotlib','pandas'],
+    install_requres = ['xarray','numpy','matplotlib','pandas','dask'],
 )
 
 
