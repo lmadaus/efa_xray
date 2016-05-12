@@ -1,30 +1,31 @@
 #!/usr/bin/env python
-
+from __future__ import print_function
 import numpy as np
 from copy import deepcopy
 import multiprocessing as mp
 
 
-def update(prior_state,obs,inflate=None,loc=False,nproc=1):
+def update(prior_state,obs,inflate=None,loc=False,nproc=1, verbose=False):
 
     # If there is 1 (or none) processors given, then 
     # Don't worry about splitting up the state
     if nproc <= 1:
-        posterior_state, posterior_obs = enkf_update(prior_state, obs, inflate=inflate, loc=loc)
+        posterior_state, posterior_obs = enkf_update(prior_state, obs, inflate=inflate,
+                                                     loc=loc, verbose=verbose)
         return posterior_state, posterior_obs
 
 
     # If we are splitting up the state, first need to calculate observation
     # priors
-    print "Computing observation priors..."
+    print("Computing observation priors...")
     ob_priors = np.array([ob.H_Xb(prior_state) for ob in obs])
     
     # Splitting function here
-    print "Splitting up state among processors..."
+    print("Splitting up state among processors...")
     old_state = prior_state.split_state(nproc)
 
     # Set up the processes
-    print "Beginning update"
+    print("Beginning update")
     processes = []
     output = mp.Queue()
     for p in xrange(nproc):
@@ -43,8 +44,8 @@ def update(prior_state,obs,inflate=None,loc=False,nproc=1):
     # Wait for all to finish
     for p in processes:
         p.join()
-    print "Done with update"
-    print "Re-assembling state"
+    print("Done with update")
+    print("Re-assembling state")
     # Get the updated state from queue
 
     posterior_state = deepcopy(prior_state)
@@ -57,11 +58,15 @@ def worker(num, statechunk, allobs, inflate, loc, obs_in_state, output):
     updated_chunk, obout = enkf_update(statechunk,allobs,inflate,loc,obs_in_state=obs_in_state)
     output.put((num, updated_chunk))
     output.put('STOP')
-    print "Worker Done!"
+    print("Worker Done!")
     return
 
 
-def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
+
+
+
+
+def enkf_update(prior_state,obs,inflate=None,loc=False,verbose=False):
     """
     Function to do the EnSRF update
     Originator: G. J. Hakim
@@ -86,23 +91,27 @@ def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
     #Nens = np.shape(Xbp)[1]   # Number of ensemble members
     #Ndim = np.shape(Xbp)[0]   # Number of variables in state vector
     #Nobs = np.shape(Y)[0]     # Total number of observations
-    Nens = prior_state.num_mems()   # Number of ensemble members
-    Nstate = prior_state.num_state()   # Number of variables in state vector
+    if verbose: print("Converting state to vector")
+    Nens = prior_state.nmems()   # Number of ensemble members
+    Nstate = prior_state.nstate()   # Number of variables in state vector
     Nobs = len(obs)     # Total number of observations
     
 
     #Xa = state.state_to_array()
+    # Convert state to vector
+    prior = prior_state.to_vect()
+    xam = prior.mean(axis=1)
+    xbm = prior.mean(axis=1)
+    Xap = prior - xam[:,None]
+    Xbp = prior - xbm[:,None]
 
-    # Copy the xray state for the output ensemble
-    post_state = deepcopy(prior_state)
-    xam = np.reshape(post_state.ensemble_mean().values,(Nstate))
-    xbm = np.reshape(prior_state.ensemble_mean().values,(Nstate))
-    print xam.shape, Nstate
-    Xap = np.reshape(post_state.ensemble_perts().values,(Nstate,Nens))
-    Xbp = np.reshape(prior_state.ensemble_perts().values,(Nstate,Nens))
-    print Xap.shape
-
+    # Make a dummy localization here to allocate this
+    # array only once
+    state_shape = prior_state.shape()[:-1] # Don't include mems
+    dum_localize = np.ones(state_shape)
+    
     # Check to see if we are appending the obs to the state
+    """
     if obs_in_state is not None:
         ob_xam = np.mean(obs_in_state, axis=1)
         ob_Xap = np.subtract(obs_in_state,ob_xam[:,None])
@@ -111,10 +120,25 @@ def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
         #print Xap.shape, ob_Xap.shape
         Xap = np.vstack((Xap, ob_Xap))
         Xbp = np.vstack((Xbp, ob_Xap))
+    """
+    if verbose: print("Computing observation priors")
+    # Compute observation priors and append to state
+    obmeans = np.zeros(Nobs)
+    obperts = np.zeros((Nobs, Nens))
+    for obnum, ob in enumerate(obs):
+        ye = ob.estimate(prior_state)
+        obmeans[obnum] = ye.mean()
+        obperts[obnum,:] = ye - ye.mean()
+    xam = np.hstack((xam, obmeans))
+    xbm = np.hstack((xbm, obmeans))
+    Xap = np.vstack((Xap, obperts))
+    Xbp = np.vstack((Xbp, obperts))
 
 
+    if verbose: print("Beginning observation loop")
     # Now loop over all observations
     for obnum,ob in enumerate(obs):
+        if (obnum % 100==0) and verbose: print("    On ob:", obnum)
         # Reset the mean and perturbations
         xbm = xam
         Xbp = Xap
@@ -124,25 +148,11 @@ def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
         #print "Mean", np.tile(xbm,(Nens,1))
         #print np.transpose(np.tile(xbm,(Nens,1))) + Xbp
         #print H
-        if obs_in_state is not None:
-            H = np.zeros(xam.shape)
-            H[Nstate+obnum] = 1.0
-        else:
-            H = ob.H(prior_state)
-        Ye = np.dot(H,np.add(xbm[:,None], Xbp))
+        H = np.zeros(xam.shape)
+        H[Nstate+obnum] = 1.0
+        mye = np.dot(H, xbm)
+        ye = np.dot(H, Xbp)
 
-        #Ye = ob.H_Xb(post_state)
-        # Ye now has shape (1 x num_members)
-        #For now, obs are just the first value
-        #Ye = np.tile(xbm[0],Nens) + Xbp[0,:]
-        #print "After:", Ye
-        #raw_input()
-
-        # The ensemble mean of the model estimate (in obs space)
-        #mye = np.mean(Ye,axis=1)
-        mye = np.mean(Ye)
-        # Remove the mean from the model estimate of ob
-        ye = np.subtract(Ye, mye)
         ob.prior_mean = mye
         #print "ye", ye
         # Find the variance among the ensemble members
@@ -181,12 +191,15 @@ def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
         # Option to localize the gain
         if loc not in [None, False]:
             # Project the localization
-            state_localize = ob.localize(prior_state, type=loc,
-                                             full_state=True)
-            if obs_in_state is not None:
-                # Now need to localize for obs
-                obs_localize = ob.localize(obs, type=loc)
-                state_localize = np.hstack((state_localize, obs_localize))
+            state_localize = ob.localize(prior_state, type=loc)
+            # This needs to be projected into the full state vector
+            # Currently is (ny,nx)
+            # Project this across all vars, all times
+            state_localize = (state_localize[None,None,:,:] * dum_localize).flatten()
+
+            # Now need to localize for obs
+            obs_localize = ob.localize(obs, type=loc)
+            state_localize = np.hstack((state_localize, obs_localize))
             kcov = np.multiply(state_localize,kcov)
             #kcov = np.dot(kcov,np.transpose(loc[ob,:]))
    
@@ -222,9 +235,12 @@ def enkf_update(prior_state,obs,inflate=None,loc=False,obs_in_state=None):
         ob.post_var = post_var
         # Record that this ob was assimilated
         ob.assimilated = True
-
+    if verbose: print("Ob loop done.  Formatting posterior.")
     # Reset the state
-    post_state.update_state_from_array(np.add(xam[:Nstate,None],Xap[:Nstate,:]))
+    post_state = deepcopy(prior_state)
+    # Rebuild the full values
+    post = (xbm[:,None] + Xbp)[:Nstate]
+    post_state.from_vect(post)
     # Return the assimilated observations
     return post_state, obs
     # Return the analysis mean and perturbations

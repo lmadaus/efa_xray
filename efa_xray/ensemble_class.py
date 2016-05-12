@@ -2,69 +2,51 @@
 from __future__ import print_function
 import numpy as np
 import pandas as pd
-import xray
-from netCDF4 import Dataset
+import xarray
+import netCDF4
 import matplotlib
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, time
 import pytz
+from scipy.spatial import cKDTree
 
 
-
-class Xray_Ensemble_State:
+class EnsembleState(xarray.Dataset):
     """Define an ensemble state vector"""
-    def __init__(self, state=None, meta=None, usevars=None, usedims=None):
+    def __init__(self, vardict, coorddict):
         """ Initialize based on the input.  We are either given a
         netCDF4 "Dataset" object as "state" with a list of variables and dimensions
         to use OR we are given a numpy ndarray as a state with the variables and
         dimensions specified in the variable "meta" """
-        
-        if isinstance(state, Dataset):
-            """ Read in the dataset here """
-            pass
-        elif isinstance(state, xray.DataArray):
-            """ We're given a data array already.  Simply set the state values
-            to be the data array """
-            self.state = state
-        else:
-            meta_names = meta.keys()
-            meta_names.sort()
-            meta_titles = [m[1] for m in meta_names]
-            # Be sure this matches the number of dimensions
-            # In the array
-            assert len(meta_titles) == len(state.shape)
-            
-            # Be sure that there is a dimension called
-            # "mem" so that we know how to format the
-            # state later for assimiation
-            assert "mem" in meta_titles
-            
-            
-            
-            # Make sure that the 'mem' dimension is the
-            # last one -- VERY IMPORTANT
-            if meta_titles[-1] != 'mem':
-                print("Dimension 'mem' is not the last dimension!")
-                return None
-            
-            # We grab all the coordinate values from the
-            # dictionary of metadata
-            coords = [meta[m] for m in meta_names]
-            # Make a DataArray (basically, a labeled
-            # numpy ndarray) from the state data with
-            # the dimensions and coordinate values specified
-            # in "meta"
-            self.state = xray.DataArray(state,
-                                    dims=meta_titles,
-                                    coords=coords)
-            
-            #Convert self.state to a Dataset instead?
+        xarray.Dataset.__init__(self, vardict, coords=coorddict)
+        # Get dimension lengths here for quick reference
+
+
+    # Functions to get various useful attributes of the state
+    def nmems(self):
+        return len(self.coords['mem'])
+    def ny(self):
+        return len(self.coords['y'])
+    def nx(self):
+        return len(self.coords['x'])
+    def ntimes(self):    
+        return len(self.coords['validtime'])
+    def vars(self):
+        return [x for x in self.variables.keys() if x not in ['validtime','lat','lon','mem','x','y']]
+    def nvars(self):
+        return len(self.vars())
+    def nstate(self):    
+        return self.ntimes() * self.ny() * self.nx() * self.nvars()
+    def shape(self):
+        """ Returns the full shape of the DataArray """
+        return self.to_array().shape
+
 
     def split_state(self,nChunks):
-        """ Function to split the state Xray object into nChunks number of
-        smaller Xray objects for multiprocessing.  Returns a dictionary of state
+        """ Function to split the state xarray object into nChunks number of
+        smaller xarray objects for multiprocessing.  Returns a dictionary of state
         chunks.  This dictionary may be re-fed into the master state using the
-        function "reintegrate_state" which will overwrite the master state Xray
+        function "reintegrate_state" which will overwrite the master state xarray
         object with the separate parts """
         
         state_chunks = {}
@@ -75,7 +57,7 @@ class Xray_Ensemble_State:
         # Now separate along the location dimension according to the bounds
         for cnum, bnds in bounds.items():
             state_chunks[cnum] = \
-                    Xray_Ensemble_State(state=self.state.isel(location=slice(bnds[0],bnds[1])))
+                    xarray_Ensemble_State(state=self.state.isel(location=slice(bnds[0],bnds[1])))
         return state_chunks
 
     def reintegrate_state(self, state_chunks):
@@ -111,78 +93,146 @@ class Xray_Ensemble_State:
         return chunk_bounds
 
         
-    def state_to_array(self):
+    def to_vect(self):
         """ Returns an array of the values in a shape of 
         Nstate x Nmems """
         # This assumes that the mems dimension is last
-        return np.reshape(self.state.values,(self.num_state(), self.num_mems()))
+        return np.reshape(self.to_array().values, (self.nstate(), self.nmems()))
     
-    def update_state_from_array(self,instate):
-        """ Takes an Nstate x Nmems ndarray and rewrites the state accordingly """
+    def from_vect(self,instate):
+        """ Takes an Nstate x Nmems ndarray and updates the state accordingly"""
         instate = np.reshape(instate,self.shape())
-        self.state.values = instate
-    
-    def shape(self):
-        """ Returns the full shape of the DataArray """
-        return self.state.shape
-    
-    def num_mems(self):
-        """Returns number of ensemble members"""
-        return self.state.coords['mem'].size
-    def num_times(self):
-        """ Returns number of times in the ensemble"""
-        return self.state.coords['time'].size
-    def num_vars(self):
-        """ Returns number of variables in the ensemble """
-        return self.state.coords['var'].size
-    def num_locs(self):
-        """ Returns number of locations """
-        return self.state.coords['location'].size
+        statearr = self.to_array()
+        statearr.values = instate
+        self.update(statearr.to_dataset(dim='variable'))
 
-
-    def num_state(self):
-        """Returns length of state vector"""
-        coord_lengths = [s.shape for v,s in self.state.coords.items()]
-        return np.product(coord_lengths)/self.num_mems()
-    
     def ensemble_mean(self):
         """Returns the ensemble mean of the state as a DataArray"""
-        return self.state.mean(dim='mem')
+        return self.mean(dim='mem')
     
     def ensemble_perts(self):
-        """Removes the ensemble mean and returns an Xray DataArray        of the perturbations from the ensemble mean"""
+        """Removes the ensemble mean and returns an xarray DataArray        of the perturbations from the ensemble mean"""
         #emean = self.ensemble_mean()
-        return self.state - self.ensemble_mean()
+        return self - self.ensemble_mean()
         #return self.state.values
 
     def ensemble_times(self):
         """ Return the values of the time dimension AS DATETIME OBJECTS """
-        tstamps = [(x - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's') \
-            for x in list(self.state['time'].values)]
-        return [datetime.utcfromtimestamp(x) for x in tstamps]
+        return self['validtime'].values
 
-    def locations(self):
-        """ Return an array of latitude/longitude pairs for each location in the
-        state """
-        # Get the locations from the state
-        locations = self.state['location'].values
-        latlons = zip([float(x.split(',')[0]) for x in locations],\
-                      [float(x.split(',')[1]) for x in locations])
-        return latlons
    
-    def project_coordinates(self,m,ny,nx):
+    def project_coordinates(self,m):
         """ Function to return projected coordinates given:
             m --> a Basemap instance defining the projection
-            ny --> Number of y points
-            nx --> Number of x points
             Returns:
                 gy,gx --> The projected coordinate arrays
         """
         # Get the grid lat lons
-        gridlocs = self.locations()
-        latgrid = np.reshape([x[0] for x in gridlocs], (ny,nx))
-        longrid = np.reshape([x[1] for x in gridlocs], (ny,nx))
-        gx,gy = m(longrid, latgrid)
+        # Make negative lons because Basemap is like that
+        lons = self['lon'].values
+        lons[lons > 180] = lons[lons > 180] - 360
+        gx,gy = m(lons, self['lat'].values)
         return gx, gy
+    
+    def nearest_points(self, lat, lon, npt=1):
+        """
+        Use the lat-lon arrays to return a list of indices
+        of the nearest npt points to the given lat-lon
+        """
+        # Use sin of lat lon to handle periodic
+        # and not worry about if we are in negative
+        # degrees
+        dist = np.hypot(np.sin(np.radians(self['lat'].values)) -
+                 np.sin(np.radians(lat)),\
+                 np.cos(np.radians(self['lon'].values)) - 
+                 np.cos(np.radians(lon)))
+        # Get indices of the flattened array
+        nearest_raw = dist.argsort(axis=None)[:npt]
+        # Convert back to 2-d coords
+        nearest = np.unravel_index(nearest_raw, self['lat'].shape)
+        return nearest
+
+    def interpolate(self, var, time, lat, lon):
+        """
+        Given a variable, lat, lon and time,
+        interpolate the state to that point
+        """
+
+        # Get the nearest four points in space
+        closey, closex = self.nearest_points(lat, lon, npt=4)
+        # Distances in km
+        distances = np.array([self.haversine(
+                            (self['lat'][y,x].values, self['lon'][y,x].values),
+                               (lat, lon)) for y,x in 
+                               zip(list(closey), list(closex))])
+        # Check for exact match (within some tolerance)
+        spaceweights = np.zeros(distances.shape)
+        if (distances < 1.0).sum() > 0:
+            spaceweights[distances.argmin()] = 1
+        else:
+        # Here, inverse distance weighting (for simplicity)
+            spaceweights = 1.0 / distances
+            spaceweights /= spaceweights.sum()
+        
+        # Get weights in time
+        time64 = np.datetime64(time)
+        valids = self['validtime'].values
+        timeweights = np.zeros(valids.shape)
+        # Check if we are outside the valid time range
+        if (time64 < valids[0]) or (time64 > valids[-1]):
+            print("Interpolation is outside of time range in state!")
+            return None
+        # Find where we are in this list
+        lastdex = (valids >= time64).argmax()
+        # If we match a particular time value, then
+        # this is just an identity
+        if valids[lastdex] == time64:
+            # Just make a one at this time
+            timeweights[lastdex] = 1
+        else:
+            # Linear interpolation
+            diff  = (valids[lastdex] - valids[lastdex-1])
+            totsec = np.abs(diff / np.timedelta64(1, 's'))
+            thisdiff = time64 - valids[lastdex]
+            thissec = np.abs(thisdiff / np.timedelta64(1,'s'))
+            # Put in appropriate weights
+            timeweights[lastdex] = float(thissec) / totsec
+            timeweights[lastdex-1] = 1.0 - (float(thissec)/totsec)
+        # Now that we have the weights, do the interpolation
+        interp = self.variables[var].values[:,closey,closex,:]
+        # Do a dot product with the time weights
+        interp = (timeweights[:,None,None] * interp).sum(axis=0)
+        # And with the space weights
+        interp = (spaceweights[:,None] * interp).sum(axis=0)
+        # Return estimate from all ensemble members
+        return interp
+
+    def haversine(self,loc1,loc2):
+        """ Use Haversine formula to compute the distance between two lat-lon
+        coordinate pairs """
+        R = 6371. # Radius of earth in kilometers
+        lat1 = np.radians(loc1[0])
+        lat2 = np.radians(loc2[0])
+        dlat = lat2 - lat1
+        dlon = np.radians(loc2[1] - loc1[1])
+
+        a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+        return R * c
+
+    def distance_to_point(self, lat, lon):
+        """
+        Use Haversine formula to estimate distances from all
+        gridpoints to a given location (lat, lon)
+        """
+        R = 6371. # Radius of earth in km
+        lat = np.radians(lat)
+        lon = np.radians(lon)
+        dlat = lat - np.radians(self['lat'].values)
+        dlon = lon - np.radians(self['lon'].values)
+        a = np.sin(dlat/2)**2 + np.cos(lat) * np.cos(np.radians(self['lat'].values)) * \
+                np.sin(dlon/2)**2
+        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1.0-a))
+        return R*c
 
 
