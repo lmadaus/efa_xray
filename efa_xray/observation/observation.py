@@ -9,7 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, time
 import pytz
-from ensemble_class import EnsembleState
+from efa_xray.state.ensemble import EnsembleState
 import sys, os
 sys.path.append('../data_parsers')
 
