@@ -235,4 +235,8 @@ class EnsembleState(xarray.Dataset):
         c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1.0-a))
         return R*c
 
-
+    def save_to_disk(self, filename='ens_state.nc'):
+        """
+        Dump this object to disk
+        """
+        self.to_netcdf(filename)
