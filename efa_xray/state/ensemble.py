@@ -3,23 +3,37 @@ from __future__ import print_function
 import numpy as np
 import pandas as pd
 import xarray
+import xarray.ufuncs as xu
 import netCDF4
 import matplotlib
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, time
 import pytz
-from scipy.spatial import cKDTree
+from copy import deepcopy
 
 
 class EnsembleState(xarray.Dataset):
     """Define an ensemble state vector"""
-    def __init__(self, vardict, coorddict):
-        """ Initialize based on the input.  We are either given a
-        netCDF4 "Dataset" object as "state" with a list of variables and dimensions
-        to use OR we are given a numpy ndarray as a state with the variables and
-        dimensions specified in the variable "meta" """
-        xarray.Dataset.__init__(self, vardict, coords=coorddict)
-        # Get dimension lengths here for quick reference
+    
+    #def __init__(self):
+    #    """ Initialize based on the input """
+    #    # Quick check to remove duplicates
+    #    #xarray.Dataset.__init__(self, vardict, coords=coorddict)
+    #    # Get dimension lengths here for quick reference
+    #    pass
+
+    @classmethod
+    def from_vardict(cls, vardict, coorddict):
+        """
+        Initializes a new EnsembleClass object when given
+        a dictionary of variables (vardict) and a dictionary
+        of coordinates (coorddict).  See documentation for
+        xarray on how to create an xarray object for how
+        these dictionaries are to be formatted
+        """
+        newstate = xarray.Dataset(vardict, coords=coorddict)
+        newstate.__class__ = cls
+        return newstate
 
 
     # Functions to get various useful attributes of the state
@@ -96,8 +110,8 @@ class EnsembleState(xarray.Dataset):
     def to_vect(self):
         """ Returns an array of the values in a shape of 
         Nstate x Nmems """
-        # This assumes that the mems dimension is last
-        return np.reshape(self.to_array().values, (self.nstate(), self.nmems()))
+        # Make sure mems dimension is last
+        return np.reshape(self.transpose('validtime','y','x','mem').to_array().values, (self.nstate(), self.nmems()))
     
     def from_vect(self,instate):
         """ Takes an Nstate x Nmems ndarray and updates the state accordingly"""
@@ -129,7 +143,8 @@ class EnsembleState(xarray.Dataset):
         """
         # Get the grid lat lons
         # Make negative lons because Basemap is like that
-        lons = self['lon'].values
+        lons = deepcopy(np.array(self['lon'].values[:]))
+        #lons = self['lon'].values
         lons[lons > 180] = lons[lons > 180] - 360
         gx,gy = m(lons, self['lat'].values)
         return gx, gy
@@ -142,10 +157,10 @@ class EnsembleState(xarray.Dataset):
         # Use sin of lat lon to handle periodic
         # and not worry about if we are in negative
         # degrees
-        dist = np.hypot(np.sin(np.radians(self['lat'].values)) -
-                 np.sin(np.radians(lat)),\
-                 np.cos(np.radians(self['lon'].values)) - 
-                 np.cos(np.radians(lon)))
+        dist = xu.hypot(xu.sin(xu.radians(self['lat'].values)) -
+                 xu.sin(xu.radians(lat)),\
+                 xu.cos(xu.radians(self['lon'].values)) - 
+                 xu.cos(xu.radians(lon)))
         # Get indices of the flattened array
         nearest_raw = dist.argsort(axis=None)[:npt]
         # Convert back to 2-d coords
@@ -228,11 +243,15 @@ class EnsembleState(xarray.Dataset):
         R = 6371. # Radius of earth in km
         lat = np.radians(lat)
         lon = np.radians(lon)
-        dlat = lat - np.radians(self['lat'].values)
-        dlon = lon - np.radians(self['lon'].values)
-        a = np.sin(dlat/2)**2 + np.cos(lat) * np.cos(np.radians(self['lat'].values)) * \
-                np.sin(dlon/2)**2
-        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1.0-a))
+        dlat = lat - xu.radians(self['lat'].values)
+        dlon = lon - xu.radians(self['lon'].values)
+        a = xu.sin(dlat/2)**2 + xu.cos(lat) * xu.cos(xu.radians(self['lat'].values)) * \
+                xu.sin(dlon/2)**2
+        c = 2 * xu.arctan2(xu.sqrt(a), xu.sqrt(1.0-a))
         return R*c
 
-
+    def save_to_disk(self, filename='ens_state.nc'):
+        """
+        Dump this object to disk
+        """
+        self.to_netcdf(filename)
