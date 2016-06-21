@@ -174,12 +174,23 @@ class EnsembleState(xarray.Dataset):
         """
 
         # Get the nearest four points in space
-        closey, closex = self.nearest_points(lat, lon, npt=4)
-        # Distances in km
-        distances = np.array([self.haversine(
+        # Check to see if lat/lons are 2d or 1d
+        if len(self['lat'].shape) == 2:
+            closey, closex = self.nearest_points(lat, lon, npt=4)
+            # Distances in km
+            distances = np.array([self.haversine(
                             (self['lat'][y,x].values, self['lon'][y,x].values),
                                (lat, lon)) for y,x in 
                                zip(list(closey), list(closex))])
+        else:
+            closen = self.nearest_points(lat, lon, npt=4)
+            closey = closen
+            closex = closen
+            # Distances in km
+            distances = np.array([self.haversine(
+                            (self['lat'][n].values, self['lon'][n].values),
+                               (lat, lon)) for n in list(closen)])
+
         # Check for exact match (within some tolerance)
         spaceweights = np.zeros(distances.shape)
         if (distances < 1.0).sum() > 0:
@@ -188,7 +199,7 @@ class EnsembleState(xarray.Dataset):
         # Here, inverse distance weighting (for simplicity)
             spaceweights = 1.0 / distances
             spaceweights /= spaceweights.sum()
-        
+
         # Get weights in time
         time64 = np.datetime64(time)
         valids = self['validtime'].values
@@ -216,7 +227,10 @@ class EnsembleState(xarray.Dataset):
         # Now that we have the weights, do the interpolation
         interp = self.variables[var].values[:,closey,closex,:]
         # Do a dot product with the time weights
-        interp = (timeweights[:,None,None] * interp).sum(axis=0)
+        if len(interp.shape) == 3:
+            interp = (timeweights[:,None,None] * interp).sum(axis=0)
+        else:
+            interp = (timeweights[:,None,None,None] * interp).sum(axis=0)
         # And with the space weights
         interp = (spaceweights[:,None] * interp).sum(axis=0)
         # Return estimate from all ensemble members

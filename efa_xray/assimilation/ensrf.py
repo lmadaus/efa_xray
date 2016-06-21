@@ -101,11 +101,16 @@ class EnSRF(Assimilation):
             if self.loc not in [None, False]:
                 # Project the localization
                 state_localize = ob.localize(self.prior, type=self.loc)
+                #print(state_localize.shape)
+                #print(dum_localize.shape)
+                # LEM---CHECK TO BE SURE THIS LOGIC WORKS FOR 1-D LATLON!!!
                 # This needs to be projected into the full state vector
-                # Currently is (ny,nx)
+                # Check for (ny,nx) or just 1-d
                 # Project this across all vars, all times
-                state_localize = (state_localize[None,None,:,:] * dum_localize).flatten()
-
+                if len(state_localize.shape) == 2:
+                    state_localize = (state_localize[None,None,:,:] * dum_localize).flatten()
+                else:
+                    state_localize = (state_localize[None,None,None,:] * dum_localize).flatten()
                 # Now need to localize for obs
                 obs_localize = ob.localize(self.obs, type=self.loc)
                 state_localize = np.hstack((state_localize, obs_localize))
