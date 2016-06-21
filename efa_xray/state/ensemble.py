@@ -190,16 +190,14 @@ class EnsembleState(xarray.Dataset):
             distances = np.array([self.haversine(
                             (self['lat'][n].values, self['lon'][n].values),
                                (lat, lon)) for n in list(closen)])
-
         # Check for exact match (within some tolerance)
         spaceweights = np.zeros(distances.shape)
         if (distances < 1.0).sum() > 0:
-            spaceweights[distances.argmin()] = 1
+            spaceweights[:,distances.argmin()] = 1
         else:
         # Here, inverse distance weighting (for simplicity)
             spaceweights = 1.0 / distances
             spaceweights /= spaceweights.sum()
-
         # Get weights in time
         time64 = np.datetime64(time)
         valids = self['validtime'].values
@@ -227,12 +225,16 @@ class EnsembleState(xarray.Dataset):
         # Now that we have the weights, do the interpolation
         interp = self.variables[var].values[:,closey,closex,:]
         # Do a dot product with the time weights
+        # And with the space weights
         if len(interp.shape) == 3:
             interp = (timeweights[:,None,None] * interp).sum(axis=0)
         else:
             interp = (timeweights[:,None,None,None] * interp).sum(axis=0)
-        # And with the space weights
-        interp = (spaceweights[:,None] * interp).sum(axis=0)
+            
+        if len(interp.shape) == 3:
+           interp = (spaceweights[:,:,None] * interp).sum(axis=1)
+        else:
+            interp = (spaceweights[:,None] * interp).sum(axis=0)
         # Return estimate from all ensemble members
         return interp
 
