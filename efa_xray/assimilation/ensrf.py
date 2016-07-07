@@ -25,10 +25,9 @@ class EnSRF(Assimilation):
     # Modified to work with XRAY enkf --> L. Madaus 2/20/2015
     """
     
-    def __init__(self, state, obs, nproc=1, verbose=False, inflate=None, loc=False):
+    def __init__(self, state, obs, nproc=1, inflation=None, verbose=True, loc=False):
         # Initialize the Assimilation inheritance
-        Assimilation.__init__(self, state, obs, nproc, verbose)
-        self.inflate = inflate
+        Assimilation.__init__(self, state, obs, nproc, inflation, verbose)
         self.loc = loc
 
     def update(self):
@@ -43,6 +42,8 @@ class EnSRF(Assimilation):
         # Do pre-processing to estimate obs and format
         # as state vector
         xam, Xap = self.format_prior_state()
+
+
 
         # Now loop over all observations
         if self.verbose: print("Beginning observation loop")
@@ -93,9 +94,6 @@ class EnSRF(Assimilation):
             # the ensemble members and the obs-transformed ensemble members
             kcov = np.dot(Xbp,np.transpose(ye)) / (Nens-1)
 
-            # Option to inflate the covariances by a certain factor
-            if self.inflate is not None:
-                kcov = self.inflate * kcov
 
             # Option to localize the gain
             if self.loc not in [None, False]:
