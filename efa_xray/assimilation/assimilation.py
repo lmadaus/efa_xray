@@ -3,7 +3,7 @@ from __future__ import print_function
 import numpy as np
 from copy import deepcopy
 import multiprocessing as mp
-from xarray import DataArray
+from xarray import DataArray, open_dataset
 
 
 
@@ -71,19 +71,12 @@ class Assimilation():
         elif isinstance(self.inflation, str):
             if self.verbose: print("Trying to load inflation from file: {:s}".format(self.inflation))
             # Load the npy state vector inflation
-            with np.load(self.inflation) as infile:
-                Nstate_inflation = infile.shape[0]
-                if self.prior.Nstate != Nstate_inflation:
-                    # The loaded array is a different size than the state
-                    print("ERROR: the array in the specified inflation file {:s} is of size {:d}, but the size of the prior state vector is {:d}! Not performing inflation.".format(self.inflation, Nstate_inflation, self.prior.Nstate))
-                    return None
-                # Convert the state to a flat vector
-                curstate = self.prior.to_vect()
-                # Update to inflated values
-                curstate = (curstate - curstate.mean(axis=1)[:,None]) * infile + curstate.mean(axis=1)[:,None]
-                # Replace the prior state with the inflated state
-                self.prior.from_vect(curstate)
-                if self.verbose: print("Succeeded inflation from file: {:s}".format(self.inflation))
+            with open_dataset(self.inflation) as infile:
+                # Update with inflated values.  The beauty of xarray is that it will handle
+                # dimension broadcasting with this.  Should error out if the inflation
+                # file dimensions don't match the prior state's dimensions
+                self.prior = self.prior.ensemble_perts() * infile + self.prior.ensemble_mean()
+            if self.verbose: print("Succeeded inflation from file: {:s}".format(self.inflation))
         else:
             # Assume this is a dictionary, so try it as such
             for k, v in self.inflation.items():
